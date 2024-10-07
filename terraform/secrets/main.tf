@@ -51,4 +51,3 @@ output "github_oauth_token_secret_id" {
 }
 
 #autocreate api key with scope restrictions
-#add link to google_cse_id creation

@@ -1,29 +1,29 @@
 variable "project_id" {
   type        = string
-  description = ""
+  description = "Project id, references existing project."
 }
 
 variable "region" {
   type        = string
   default     = "us-central1"
-  description = ""
+  description = "Region for the created resources."
 }
 
 variable "prefix" {
   type        = string
   default     = "langchain-google"
-  description = ""
+  description = "Resources name prefix."
 }
 
 variable "github_oauth_token_secret_id" {
   type        = string
-  description = ""
+  description = "Gcp secret id containing github oauth token."
 }
 
 variable "langchain_github_repo" {
   type        = string
-  description = ""
-  default = "https://github.com/langchain-ai/langchain-google.git"
+  description = "Langchain github repo."
+  default     = "https://github.com/langchain-ai/langchain-google.git"
 }
 
 variable "github_app_installation_id" {

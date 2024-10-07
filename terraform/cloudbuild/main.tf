@@ -2,15 +2,18 @@ provider "google" {
   project = var.project_id
 }
 
-
+#todo split roles in sa per lib
 locals {
   cloudbuild_service_account_roles = [
     "roles/bigquery.user",                     #BigQuery User
     "roles/discoveryengine.editor",            #Discovery Engine Editor
     "roles/logging.logWriter",                 #Logs Writer
+    "roles/logging.logViewer",                 #Logs Viewer
     "roles/secretmanager.secretAccessor",      #Secret Manager Secret Accessor
     "roles/serviceusage.serviceUsageConsumer", #Service Usage Consumer
     "roles/aiplatform.user",                   #Vertex AI User
+    "roles/documentai.viewer",                 #Document AI Viewer /community
+    "roles/documentai.apiUser",                #Document AI API User /community
   ]
   cloudbuild_env_vars = merge(
     {

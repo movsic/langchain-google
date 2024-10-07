@@ -268,7 +268,7 @@ aim to verify the correct behavior of the engines and databases according to
 their specifications and requirements.
 
 To run some integration tests, you will need GCP project configured.
-The configuration of the GCP project required for integration testing is stored in the [terraform folder]() within each library.
+The configuration of the GCP project required for integration testing is stored in the terraform folder within integration tests filder in each library (langchain-google/libs/<lib>/tests/integration_tests/terraform).
 
 ### Prepare environment variables for local testing:
 
