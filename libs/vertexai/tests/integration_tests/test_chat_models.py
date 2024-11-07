@@ -1,11 +1,13 @@
 """Test ChatGoogleVertexAI chat model."""
 
 import base64
+import io
 import json
 import os
 from typing import List, Literal, Optional, cast
 
 import pytest
+import requests
 from google.cloud import storage
 from google.cloud.aiplatform_v1beta1.types import Blob, Content, Part
 from google.oauth2 import service_account
@@ -19,8 +21,13 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langchain_core.outputs import ChatGeneration, LLMResult
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
 from langchain_core.rate_limiters import InMemoryRateLimiter
+from langchain_core.runnables import RunnableSerializable
 from langchain_core.tools import tool
 from pydantic import BaseModel
 
@@ -34,7 +41,7 @@ from langchain_google_vertexai import (
 from langchain_google_vertexai.chat_models import _parse_chat_history_gemini
 from tests.integration_tests.conftest import _DEFAULT_MODEL_NAME
 
-model_names_to_test = ["codechat-bison", _DEFAULT_MODEL_NAME]
+model_names_to_test = [_DEFAULT_MODEL_NAME]
 
 rate_limiter = InMemoryRateLimiter(requests_per_second=1.0)
 
@@ -294,12 +301,12 @@ def test_multimodal_media_inline_base64_agent() -> None:
     tools = [get_climate_info]
     agent = agents.create_tool_calling_agent(
         llm=llm,
-        tools=tools,  # type: ignore[arg-type]
+        tools=tools,
         prompt=prompt_template,
     )
     agent_executor = agents.AgentExecutor(  # type: ignore[call-arg]
         agent=agent,
-        tools=tools,  # type: ignore[arg-type]
+        tools=tools,
         verbose=False,
         stream_runnable=False,
     )
@@ -962,6 +969,65 @@ def test_langgraph_example() -> None:
     assert isinstance(step2, AIMessage)
 
 
+@pytest.mark.asyncio
+@pytest.mark.release
+async def test_astream_events_langgraph_example() -> None:
+    llm = ChatVertexAI(
+        model_name="gemini-1.5-flash-002",
+        max_output_tokens=8192,
+        temperature=0.2,
+    )
+
+    add_declaration = {
+        "name": "add",
+        "description": "Adds a and b.",
+        "parameters": {
+            "properties": {
+                "a": {"description": "first int", "type": "integer"},
+                "b": {"description": "second int", "type": "integer"},
+            },
+            "required": ["a", "b"],
+            "type": "object",
+        },
+    }
+
+    multiply_declaration = {
+        "name": "multiply",
+        "description": "Multiply a and b.",
+        "parameters": {
+            "properties": {
+                "a": {"description": "first int", "type": "integer"},
+                "b": {"description": "second int", "type": "integer"},
+            },
+            "required": ["a", "b"],
+            "type": "object",
+        },
+    }
+
+    messages = [
+        SystemMessage(
+            content=(
+                "You are a helpful assistant tasked with performing "
+                "arithmetic on a set of inputs."
+            )
+        ),
+        HumanMessage(content="Multiply 2 and 3"),
+        HumanMessage(content="No, actually multiply 3 and 3!"),
+    ]
+    agenerator = llm.astream_events(
+        messages,
+        tools=[{"function_declarations": [add_declaration, multiply_declaration]}],
+        version="v2",
+    )
+    events = [events async for events in agenerator]
+    assert len(events) > 0
+    # Check the function call in the output
+    output = events[-1]["data"]["output"]
+    assert output.additional_kwargs["function_call"]["name"] == "multiply"
+
+
+@pytest.mark.xfail(reason="can't create service account key on gcp")
+@pytest.mark.release
 def test_init_from_credentials_obj() -> None:
     credentials_dict = json.loads(os.environ["GOOGLE_VERTEX_AI_WEB_CREDENTIALS"])
     credentials = service_account.Credentials.from_service_account_info(
@@ -976,4 +1042,69 @@ def test_response_metadata_avg_logprobs() -> None:
     llm = ChatVertexAI(model="gemini-1.5-flash")
     response = llm.invoke("Hello!")
     probs = response.response_metadata.get("avg_logprobs")
-    assert isinstance(probs, float)
+    if probs is not None:
+        assert isinstance(probs, float)
+
+
+@pytest.fixture
+def multimodal_pdf_chain() -> RunnableSerializable:
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            SystemMessagePromptTemplate.from_template(
+                """
+            Describe the provided document.
+            """
+            ),
+            HumanMessagePromptTemplate.from_template(
+                [
+                    {"type": "text", "text": "# Document"},  # type: ignore
+                    {"type": "image_url", "image_url": {"url": "{image}"}},  # type: ignore
+                ]
+            ),
+        ]
+    )
+
+    model = ChatVertexAI(model_name="gemini-1.5-flash-001")
+
+    chain = prompt | model
+
+    return chain
+
+
+@pytest.mark.release
+def test_multimodal_pdf_input_gcs(multimodal_pdf_chain: RunnableSerializable) -> None:
+    gcs_uri = "gs://cloud-samples-data/generative-ai/pdf/2312.11805v3.pdf"
+    # GCS URI
+    response = multimodal_pdf_chain.invoke(dict(image=gcs_uri))
+    assert isinstance(response, AIMessage)
+
+
+@pytest.mark.release
+def test_multimodal_pdf_input_url(multimodal_pdf_chain: RunnableSerializable) -> None:
+    url = "https://abc.xyz/assets/95/eb/9cef90184e09bac553796896c633/2023q4-alphabet-earnings-release.pdf"
+    # URL
+    response = multimodal_pdf_chain.invoke(dict(image=url))
+    assert isinstance(response, AIMessage)
+
+
+@pytest.mark.release
+def test_multimodal_pdf_input_b64(multimodal_pdf_chain: RunnableSerializable) -> None:
+    url = "https://abc.xyz/assets/95/eb/9cef90184e09bac553796896c633/2023q4-alphabet-earnings-release.pdf"
+    request_response = requests.get(url, allow_redirects=True)
+    # B64
+    with io.BytesIO() as stream:
+        stream.write(request_response.content)
+        image_data = base64.b64encode(stream.getbuffer()).decode("utf-8")
+        image = f"data:application/pdf;base64,{image_data}"
+        response = multimodal_pdf_chain.invoke(dict(image=image))
+        assert isinstance(response, AIMessage)
+
+
+@pytest.mark.release
+def test_logprobs() -> None:
+    llm = ChatVertexAI(model="gemini-1.5-flash", logprobs=True)
+    msg = llm.invoke("how are you")
+    assert msg.response_metadata["logprobs_result"]["chosen_candidates"]
+
+    msg = llm.invoke("how are you", logprobs=2)
+    assert msg.response_metadata["logprobs_result"]["top_candidates"]

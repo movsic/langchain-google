@@ -119,6 +119,8 @@ class _BaseVertexAIVectorStore(VectorStore):
         neighbors_list = self._searcher.find_neighbors(
             embeddings=[embedding], k=k, filter_=filter, numeric_filter=numeric_filter
         )
+        if not neighbors_list:
+            return []
 
         keys = [key for key, _ in neighbors_list[0]]
         distances = [distance for _, distance in neighbors_list[0]]
@@ -133,6 +135,36 @@ class _BaseVertexAIVectorStore(VectorStore):
             missing_docs = [key for key, doc in zip(keys, documents) if doc is None]
             message = f"Documents with ids: {missing_docs} not found in the storage"
             raise ValueError(message)
+
+    def delete(self, ids: Optional[List[str]] = None, **kwargs: Any) -> Optional[bool]:
+        """
+        Delete by vector ID.
+        Args:
+            ids (Optional[List[str]]): List of ids to delete.
+            **kwargs (Any): If added metadata={}, deletes the documents
+            that match the metadata filter and the parameter ids is not needed.
+        Returns:
+            Optional[bool]: True if deletion is successful.
+        Raises:
+            ValueError: If ids is None or an empty list.
+            RuntimeError: If an error occurs during the deletion process.
+        """
+        metadata = kwargs.get("metadata")
+        if (not ids and not metadata) or (ids and metadata):
+            raise ValueError(
+                "You should provide ids (as list of id's) or a metadata"
+                "filter for deleting documents."
+            )
+        if metadata:
+            ids = self._searcher.get_datapoints_by_filter(metadata=metadata)
+            if not ids:
+                return False
+        try:
+            self._searcher.remove_datapoints(datapoint_ids=ids)  # type: ignore[arg-type]
+            self._document_storage.mdelete(ids)  # type: ignore[arg-type]
+            return True
+        except Exception as e:
+            raise RuntimeError(f"Error during deletion: {str(e)}") from e
 
     def similarity_search(
         self,
@@ -375,6 +407,7 @@ class VectorSearchVectorStoreDatastore(_BaseVertexAIVectorStore):
         embedding: Optional[Embeddings] = None,
         stream_update: bool = False,
         datastore_client_kwargs: Optional[Dict[str, Any]] = None,
+        exclude_from_indexes: Optional[List[str]] = None,
         datastore_kind: str = "document_id",
         datastore_text_property_name: str = "text",
         datastore_metadata_property_name: str = "metadata",
@@ -399,6 +432,7 @@ class VectorSearchVectorStoreDatastore(_BaseVertexAIVectorStore):
                 index must be compatible with stream/batch updates.
             kwargs: Additional keyword arguments to pass to
                 VertexAIVectorSearch.__init__().
+            exclude_from_indexes: Fields to exclude from datastore indexing
 
         Returns:
             A configured VectorSearchVectorStoreDatastore.
@@ -425,11 +459,14 @@ class VectorSearchVectorStoreDatastore(_BaseVertexAIVectorStore):
 
         datastore_client = sdk_manager.get_datastore_client(**datastore_client_kwargs)
 
+        if exclude_from_indexes is None:
+            exclude_from_indexes = []
         document_storage = DataStoreDocumentStorage(
             datastore_client=datastore_client,
             kind=datastore_kind,
             text_property_name=datastore_text_property_name,
             metadata_property_name=datastore_metadata_property_name,
+            exclude_from_indexes=exclude_from_indexes,
         )
 
         return cls(

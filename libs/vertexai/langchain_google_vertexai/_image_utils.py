@@ -4,7 +4,7 @@ import base64
 import os
 import re
 from enum import Enum
-from typing import Dict, Union
+from typing import Dict, Optional, Union
 from urllib.parse import urlparse
 
 import requests
@@ -50,7 +50,6 @@ class ImageBytesLoader:
             image_string: Can be either:
                     - Google cloud storage URI
                     - B64 Encoded image string
-                    - Local file path
                     - URL
 
         Returns:
@@ -70,12 +69,18 @@ class ImageBytesLoader:
             return self._bytes_from_url(image_string)
 
         if route == Route.LOCAL_FILE:
-            return self._bytes_from_file(image_string)
+            msg = (
+                "Support for loading local files has been removed for security "
+                "reasons. Please pass in images as one of: "
+                "Google Cloud Storage URI, b64 encoded image string (data:image/...), "
+                "or valid image url. "
+            )
+            raise ValueError(msg)
 
         raise ValueError(
             "Image string must be one of: Google Cloud Storage URI, "
-            "b64 encoded image string (data:image/...), valid image url, "
-            f"or existing local image file. Instead got '{image_string}'."
+            "b64 encoded image string (data:image/...), valid image url. "
+            f"Instead got '{image_string}'."
         )
 
     def load_part(self, image_string: str) -> Part:
@@ -104,7 +109,17 @@ class ImageBytesLoader:
             bytes_ = self._bytes_from_url(image_string)
 
         if route == Route.LOCAL_FILE:
-            bytes_ = self._bytes_from_file(image_string)
+            msg = (
+                "Support for loading local files has been removed for security "
+                "reasons. Please pass in images as one of: "
+                "Google Cloud Storage URI, b64 encoded image string (data:image/...), "
+                "or valid image url. "
+            )
+            raise ValueError(msg)
+
+        mime_type = self._has_known_mimetype(image_string)
+        if mime_type:
+            return Part.from_data(bytes_, mime_type=mime_type)
 
         return Part.from_image(Image.from_bytes(bytes_))
 
@@ -116,7 +131,7 @@ class ImageBytesLoader:
         if image_string.startswith("gs://"):
             return Route.GOOGLE_CLOUD_STORAGE
 
-        if image_string.startswith("data:image/"):
+        if image_string.startswith("data:"):
             return Route.BASE64
 
         if self._is_url(image_string):
@@ -127,8 +142,8 @@ class ImageBytesLoader:
 
         raise ValueError(
             "Image string must be one of: Google Cloud Storage URI, "
-            "b64 encoded image string (data:image/...), valid image url, "
-            f"or existing local image file. Instead got '{image_string}'."
+            "b64 encoded image string (data:image/...), or valid image url. "
+            f"Instead got '{image_string}'."
         )
 
     def _bytes_from_b64(self, base64_image: str) -> bytes:
@@ -141,7 +156,7 @@ class ImageBytesLoader:
             Image bytes
         """
 
-        pattern = r"data:image/\w{2,4};base64,(.*)"
+        pattern = r"data:\w+/\w{2,4};base64,(.*)"
         match = re.search(pattern, base64_image)
 
         if match is not None:
@@ -149,19 +164,6 @@ class ImageBytesLoader:
             return base64.b64decode(encoded_string)
 
         raise ValueError(f"Error in b64 encoded image. Must follow pattern: {pattern}")
-
-    def _bytes_from_file(self, file_path: str) -> bytes:
-        """Gets image bytes from a local file path.
-
-        Args:
-            file_path: Existing file path.
-
-        Returns:
-            Image bytes
-        """
-        with open(file_path, "rb") as image_file:
-            image_bytes = image_file.read()
-        return image_bytes
 
     def _bytes_from_url(self, url: str) -> bytes:
         """Gets image bytes from a public url.
@@ -215,6 +217,21 @@ class ImageBytesLoader:
             return all([result.scheme, result.netloc])
         except Exception:
             return False
+
+    def _has_known_mimetype(self, image_url: str) -> Optional[str]:
+        """Checks weather the image needs other mimetype. Currently only identifies
+        pdfs, otherwise it will return None and it will be treated as an image.
+        """
+
+        # For local files or urls
+        if image_url.endswith(".pdf"):
+            return "application/pdf"
+
+        # for b64 encoded data
+        if image_url.startswith("data:application/pdf;base64"):
+            return "application/pdf"
+
+        return None
 
 
 def image_bytes_to_b64_string(
